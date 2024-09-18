@@ -5,4 +5,27 @@
 3. Каждый этап должен быть прописан Верхним регистром, на русском языке. 
 	Прим: %СОЗДАНИЕ ФИЛЬТРА ПРИПОДНЯТЫЙ КОСИНУС:
 	      %МОДУЛЯЦИЯ ДАННЫХ
- 
+4. Каждый логический элемент должен быть выдеден отступом в 1 строку сверху и снизу.
+	Прим: % демодуляция принятого отфильтрованного сигнала
+
+		dataSymbolsOut = qamdemod(rxFiltSignal,M);     % Демодуляция 16QAM 
+		codedDataOut = int2bit(dataSymbolsOut,k);      % Возвращение данных в вектор столбцов
+
+		% ПРИМЕНЕНИЕ ДЕКОДИРОВАНИЯ ВИТЕРБИ:
+
+		traceBack = 16;                      % Длинна декодированного сигнала (?не факт)
+		numCodeWords = ...
+    		floor(length(codedDataOut)*2/3);     % Количество полных кодовых слов
+		dataOut = ...
+    		vitdec(codedDataOut(1:numCodeWords*3/2), ...
+    		tPoly,traceBack,'cont','hard');      % Декодирование данных
+
+		% ВЫЧИСЛЕНИЕ КОЭФФИЦИЕНТА БИТОВЫХ ОШИБОК:
+
+		decDelay = 2*traceBack; %Задержка декодера [бит]
+
+		%Определение количества ошибок и соответствующего BER
+		[numErrors,ber] = biterr(dataIn(1:end - decDelay),dataOut(decDelay + 1:end));  
+		fprintf(['\nFor an EbNo setting of %3.1f dB, ' ... %Вывод в окно матлаб значения КБО и кол-ва ошибок
+   		 'the bit error rate is %5.2e, based on %d errors.\n'], ...
+    		EbNo,ber,numErrors)

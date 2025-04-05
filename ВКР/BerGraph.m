@@ -1,206 +1,197 @@
 clc, clear, close all
-numSymPerFrame = 2^12;  % РљРѕР»-РІРѕ РљРђРњ СЃРёРјРІРѕР»РѕРІ РІ РєР°РґСЂРµ
-M = 16;                 % Р“Р»СѓР±РёРЅР° РјРѕРґСѓР»СЏС†РёРё
+
+%%%ПАРАМЕТРЫ СИСТЕМЫ:
+numSymPerFrame = 2^12;  % Кол-во КАМ символов в кадре
+M = 16;                 % Глубина модуляции
 k = log2(M);
-filtlen = 16;           % Р”Р»РёРЅР° С„РёР»СЊС‚СЂР° РІ СЃРёРјРІРѕР»Р°С…
-rolloff = 0.5;          % РљРѕСЌС„С„РёС†РёРµРЅС‚ Р·Р°С‚СѓС…Р°РЅРёСЏ С„РёР»СЊС‚СЂР°
-sps = 32;               % РєРѕР»РёС‡РµСЃС‚РІР° РІС‹Р±РѕСЂРѕРє РЅР° СЃРёРјРІРѕР»
-fs = sps*4;             % С‡Р°СЃС‚РѕС‚Р° РґРёСЃРєСЂРµС‚РёР·Р°С†РёРё
-fss1 = 0.3 * fs;        % Р”Р»СЏ СѓРїСЂР°РІР»РµРЅРёСЏ СЃРјРµС‰РµРЅРёРµРј СЃРїРј СЃРёРіРЅР°Р»Р° РѕС‚ 0 РґРѕ 2pi
-fss2 = 0.7 * fs; 
-EbNoVec = (0:11);       % РІРµР»РёС‡РёРЅР° Eb/No (dB)
-codeRate = 2/3;         % РґР»СЏ РєРѕРґР° СЃРѕ СЃРєРѕСЂРѕСЃС‚СЊСЋ 2/3 СЃ РїРѕРјРѕС‰СЊСЋ С„СѓРЅРєС†РёРё poly2trellis. 
-counter = 0;            % РЎС‡РµС‚С‡РёРє РґР»СЏ Р РЈ
+filtlen = numSymPerFrame*2^(-1);         % Длина фильтра в символах
+rolloff = 0.1;         % Коэффициент затухания фильтра
+sps = 16;               % количества выборок на символ
+fss1 = 0.2 * sps;        % Для управления смещением спм сигнала от 0 до 2pi
+fss2 = 0.7 * sps; 
+EbNoVec = (0:8);       % величина Eb/No (dB)
+codeRate = 2/3;         % для кода со скоростью 2/3 с помощью функции poly2trellis. 
+counter = 0;            % Счетчик для РУ
 traceBack = 16;
 
-%%РћРЎРЁ
-snr = convertSNR(EbNoVec,"ebno","snr",BitsPerSymbol=k, ...
-    SamplesPerSymbol=sps, CodingRate=codeRate);
+%%ОСШ
+snr = EbNoVec + 10*log10((k*codeRate)/sps); %k = BitsPerSymbol; sps = SamplesPerSymbol
+%%%СИМУЛЯЦИЯ ВРЕМЕНИ
+%simulationTime = 1;
+%timeStep = 0.1;
 
+%for time = 0:timeStep:simulationTime
+%    if time < simulationTime/2
 
-berEst = zeros(size(EbNoVec));
-for n = 1:length(snr)
-    % РћР±РЅСѓР»РµРЅРёРµ РѕС€РёР±РѕРє Рё Р±РёС‚
-    numErrs = 0;
-    numBits = 0;
-    
-    while numErrs < 10 || numBits < 1e3
+        berEst = zeros(size(EbNoVec));
+        for n = 1:length(snr)
+            % Обнуление ошибок и бит
+            numErrs = 0;
+            numBits = 0;
+        
+            while numErrs < 10 || numBits < 1e3
 
-%Р’РҐРћР”РќР«Р• Р”РђРќРќР«Р• 1
+        %%ПЕРЕДАТЧИК 1
+        
+                [txSigUp1,tPoly1,rrcFilter1,ts1,dataIn1] = Transmitter(numSymPerFrame,k,M,rolloff,filtlen,sps,fss1);
+        
+        %%ПЕРЕДАТЧИК 2
+        
+                [txSigUp2,tPoly2,rrcFilter2,ts2,dataIn2] = Transmitter(numSymPerFrame,k,M,rolloff,filtlen,sps,fss2);
+        
+        %%%КАНАЛ
+        
+        %%ПРОХРЖДЕНИЕ ЧЕРЕЗ АБГШ
+        
+                NoiseSig1 = awgn(txSigUp1,snr(n),'measured');
+                NoiseSig2 = awgn(txSigUp2,snr(n),'measured');
+        
+                rxSig = NoiseSig1 + NoiseSig2;
+
+        %%ИНТЕРФЕРЕНЦИОННОЕ ВЗАИМОДЕЙСТВИЕ 
+                a1 = 1.0; %Весовые коэффициенты гармонических составляющих
+                a2 = 0.3;
+                a3 = 0.1;
+
+                interfChan = a1*rxSig + a2*rxSig.^2 + a3*rxSig.^3;
+
+        %%ПРИЕМНИК 1
+        
+                [dataOut1] = Receiver(rrcFilter1,filtlen,sps,fss1,rxSig,ts1,M,k,tPoly1,traceBack);
+        
+        %%ПРИЕМНИК 2
+        
+                [dataOut2] = Receiver(rrcFilter2,filtlen,sps,fss2,interfChan,ts2,M,k,tPoly2,traceBack);
+        
+        %РАССЧЕТ КОЛЛИЧЕСТВА ОШИБОЧНЫХ БИТ 1
+        
+                decDelay = 2*traceBack; %Задержка декодера [бит]
+                if length(dataIn1) > decDelay
+                    nErrors = biterr(dataIn1(1:end - decDelay),dataOut1(decDelay + 1:end));
+                else
+                    nErrors = 0;
+                end
+                % Счетчики бит и ошибок
+                numErrs = numErrs + nErrors;
+                numBits = numBits + numSymPerFrame*k;
+            end
+        
+        %%ОЦЕНКА КОЭФФИЦИЕНТА БИТОВЫХ ОШИБОК 1
+              
+                berEst1(n) = numErrs/numBits
+             
+              end
+              %РАССЧЕТ КОЛЛИЧЕСТВА ОШИБОЧНЫХ БИТ 2
+        
+                decDelay = 2*traceBack; %Задержка декодера [бит]
+                if length(dataIn2) > decDelay
+                    nErrors = biterr(dataIn2(1:end - decDelay),dataOut2(decDelay + 1:end));
+                else
+                    nErrors = 0;
+                end
+                % Счетчики бит и ошибок
+                numErrs = numErrs + nErrors;
+                numBits = numBits + numSymPerFrame*k;
+        
+        %%ОЦЕНКА КОЭФФИЦИЕНТА БИТОВЫХ ОШИБОК 2
+        
+              berEst2(n) = numErrs/numBits;
+        
+        %%ОЦЕНКА СПМ МЕТОДОМ УЭЛЧА
+        
+        [pxx,wx] = pwelch(rxSig,[],[],512,[]); %Второе значение - размер окна, третье - прекрытие окон, 
+                                               % четвертое - количество ДПФ преобразований (разделений на них), пятое - указание на какой частоте СПМ
+        plot(wx,10*log10(pxx))
+        grid
+        xlabel('Spectrum')
+        ylabel('Power')
+        
+        %%ТЕОРЕТИЧЕСКИЕ ЗНАЧЕНИЯ КБО С АБГШ КАНАЛОМ
+        
+        berTheoryawgn1 = berawgn(EbNoVec,'qam',M);
+        semilogy(EbNoVec,berEst1,'*')
+        hold on
+        berTheoryawgn2 = berawgn(EbNoVec,'qam',M);
+        semilogy(EbNoVec,berEst2,'+')
+        hold on
+        semilogy(EbNoVec,berTheoryawgn1)
+        hold on
+        spect = distspec(tPoly1,8);
+        
+        %%ТЕОРЕТИЧЕСКИЕ ЗНАЧЕНИЯ КБО С КОДЕРОМ КАНАЛА:
+        
+        berTheoryCoded = bercoding(EbNoVec,'conv','hard',codeRate,spect,'qam',M,'nondiff')
+        semilogy(EbNoVec,berTheoryCoded)
+        grid
+        legend('Estimated BER1','Estimated BER2','Theoretical BER awgn','Theoretical BER coding')
+        xlabel('Eb/No (dB)')
+        ylabel('Bit Error Rate')
+%    end
+%end
+        
+%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
+%%%ФУНКЦИИ
+
+%%
+function [txSigUp,tPoly,rrcFilter,ts,dataIn] = Transmitter(numSymPerFrame,k,M,rolloff,filtlen,sps,fss)
+%%ПЕРЕДАТЧИК
+
+%ГЕНЕРАЦИЯ ВХОДНЫХ ДАННЫХ
+        
         dataIn = randi([0 1],numSymPerFrame*k,1);
 
-%%РџР•Р Р•Р”РђРўР§РРљ 1
+%%ПРИМЕНЕНИЕ СВЕРТОЧНОГО КОДА:
 
-        [txSigUp1,tPoly1,rrcFilter1,ts1] = Transmitter(dataIn,k,M,rolloff,filtlen,sps,fs,fss1);
-
-%%РџР•Р Р•Р”РђРўР§РРљ 2
-
-        [txSigUp2,tPoly2,rrcFilter2,ts2] = Transmitter(dataIn,k,M,rolloff,filtlen,sps,fs,fss2);
-
-%%%РљРђРќРђР›
-
-%РџР РћРҐР Р–Р”Р•РќРР• Р§Р•Р Р•Р— РђР‘Р“РЁ
-
-txSigUp = txSigUp1 + txSigUp2;
-
-        rxSig = awgn(txSigUp,snr(n),'measured');
-
-%%РџР РР•РњРќРРљ 1
-        
-        [b,a] = butter(4,[0.2 0.4],'bandpass');
-
-        BPFilter1 = filter(b,a,rxSig);
-
-        [dataOut1] = Receiver(rrcFilter1,filtlen,sps,fss1,BPFilter1,ts1,M,k,tPoly1,traceBack);
-
-
-%%РџР РР•РњРќРРљ 2
-        
-        
-
-        [dataOut2] = Receiver(rrcFilter2,filtlen,sps,fss2,rxSig,ts2,M,k,tPoly2,traceBack);
-
-%Р РђРЎРЎР§Р•Рў РљРћР›Р›РР§Р•РЎРўР’Рђ РћРЁРР‘РћР§РќР«РҐ Р‘РРў 1
-
-        decDelay = 2*traceBack; %Р—Р°РґРµСЂР¶РєР° РґРµРєРѕРґРµСЂР° [Р±РёС‚]
-        if length(dataIn) > decDelay
-            nErrors = biterr(dataIn(1:end - decDelay),dataOut1(decDelay + 1:end));
-        else
-            nErrors = 0;
-        end
-        % РЎС‡РµС‚С‡РёРєРё Р±РёС‚ Рё РѕС€РёР±РѕРє
-        numErrs = numErrs + nErrors;
-        numBits = numBits + numSymPerFrame*k;
-    end
+            constrlen = [5 4];           % Длина кодового ограничения
+            genpoly = [23 35 0; 0 5 13]; % Создание Полиномов
     
-%%РћР¦Р•РќРљРђ РљРћР­Р¤Р¤РР¦РР•РќРўРђ Р‘РРўРћР’Р«РҐ РћРЁРР‘РћРљ 1
-
-      berEst(n) = numErrs/numBits
-end
-
-%%РћР¦Р•РќРљРђ РЎРџРњ РњР•РўРћР”РћРњ РЈР­Р›Р§Рђ
-
-[pxx,wx] = pwelch(BPFilter1,[],[],128,[]); %Р’С‚РѕСЂРѕРµ Р·РЅР°С‡РµРЅРёРµ - СЂР°Р·РјРµСЂ РѕРєРЅР°, С‚СЂРµС‚СЊРµ - РїСЂРµРєСЂС‹С‚РёРµ РѕРєРѕРЅ, 
-        % С‡РµС‚РІРµСЂС‚РѕРµ - РєРѕР»РёС‡РµСЃС‚РІРѕ Р”РџР¤ РїСЂРµРѕР±СЂР°Р·РѕРІР°РЅРёР№ (СЂР°Р·РґРµР»РµРЅРёР№ РЅР° РЅРёС…), РїСЏС‚РѕРµ - СѓРєР°Р·Р°РЅРёРµ РЅР° РєР°РєРѕР№ С‡Р°СЃС‚РѕС‚Рµ РЎРџРњ
-plot(wx,10*log10(pxx))
-
-%%РўР•РћР Р•РўРР§Р•РЎРљРР• Р—РќРђР§Р•РќРРЇ РљР‘Рћ РЎ РђР‘Р“РЁ РљРђРќРђР›РћРњ
-
-berTheoryawgn = berawgn(EbNoVec,'qam',M);
-semilogy(EbNoVec,berEst,'*')
-hold on
-semilogy(EbNoVec,berTheoryawgn)
-hold on
-spect = distspec(tPoly1,8);
-
-%%РўР•РћР Р•РўРР§Р•РЎРљРР• Р—РќРђР§Р•РќРРЇ РљР‘Рћ РЎ РљРћР”Р•Р РћРњ РљРђРќРђР›Рђ:
-
-berTheoryCoded = bercoding(EbNoVec,'conv','hard',codeRate,spect,'qam',M,'nondiff')
-semilogy(EbNoVec,berTheoryCoded)
-grid
-legend('Estimated BER','Theoretical BER awgn','Theoretical BER coding')
-xlabel('Eb/No (dB)')
-ylabel('Bit Error Rate')
-
-%%Р РЈ 
-%СЂР°Р±РѕС‚Р°РµС‚, РЅРѕ СѓРІРµР»РёС‡РёРІР°РµС‚ РґР»РёС‚РµР»СЊРЅРѕСЃС‚СЊ СЂР°СЃСЃС‡РµС‚РѕРІ >100 СЂР°Р·
-
-        %scope  = timescope('SampleRate',Fs,...
-        %    'TimeSpanOverrunAction','Scroll',...
-        %    'TimeSpanSource','Property','TimeSpan',100,...
-        %    'ShowGrid',true,'LayoutDimensions',[3 1],'NumInputPorts',3);
-        %scope.ActiveDisplay = 1;
-        %scope.YLimits = [0 5];
-        %scope.Title = 'Input Signal';
-        %scope.ActiveDisplay = 2;
-        %scope.YLimits = [0 350];
-        %scope.Title = 'Compare Signal Energy with a Threshold';
-        %scope.ActiveDisplay = 3;
-        %scope.YLimits = [0 2];
-        %scope.PlotType = 'Stairs';
-        %scope.Title = 'Detect When Signal Energy Is Greater Than the Threshold';
-        %threshold = 30; %РџРѕСЂРѕРі РѕРїСЂРµРґРµР»РµРЅРёСЏ
-        %FrameLength = 20;
-        %Fs = 100;
-        %movrmsWin = dsp.MovingRMS(20);
-        %for index = 1:length(rxSig)
-        %    V = rxSig(index);
-        %    for i = 1:90
-        %        x = V + 0.1 * randn(FrameLength,1);
-        %        y1 = movrmsWin(x);
-        %        y1ener = (y1(end)^2)*FrameLength;
-        %        event = (y1ener>threshold);
-        %        %if event == 1
-        %        %    counter = counter + 1 %СЃС‡РµС‚С‡РёРє РґР»СЏ РѕРїРµСЂРµРґРµР»РµРЅРёСЏ РІРµСЂРЅРѕСЃС‚Рё
-        %        %    РґРµС‚РµРєС‚РёСЂРѕРІР°РЅРёСЏ РЅРµ РЅР° РіР»Р°Р· СЃ СѓС‡РµС‚РѕРј С‡Р°СЃС‚РѕС‚С‹ РґРёСЃРєСЂРµС‚РёР·Р°С†РёРё 
-        %        %end
-        %        
-        %    end
-        %end
-%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%%
-%%%Р¤РЈРќРљР¦РР
-
-        function [txSigUp,tPoly,rrcFilter,ts] = Transmitter(dataIn,k,M,rolloff,filtlen,sps,fs,fss)
-%%РџР•Р Р•Р”РђРўР§РРљ
-
-        %rng default  % РѕРґРёРЅР°РєРѕРІС‹Рµ Р·РЅР°С‡РµРЅРёСЏ РіРµРЅРµСЂР°С†РёРё РґР»СЏ РїСЂРѕРІРµСЂРєРё
-        % Р“РµРЅРµСЂР°С†РёСЏ РґР°РЅРЅС‹С… РІ РґРІРѕРёС‡РЅРѕР№ РЎР§ Рё РёС… РїРµСЂРµРІРѕРґ РІ СЃРёРјРІРѕР»С‹
+            tPoly = poly2trellis(constrlen,genpoly); %Определение решетки сверточного кодирования                                         
         
-        
-        
-
-%%РџР РРњР•РќР•РќРР• РЎР’Р•Р РўРћР§РќРћР“Рћ РљРћР”Рђ:
-
-            constrlen = [5 4];           % Р”Р»РёРЅР° РєРѕРґРѕРІРѕРіРѕ РѕРіСЂР°РЅРёС‡РµРЅРёСЏ
-            genpoly = [23 35 0; 0 5 13]; % РЎРѕР·РґР°РЅРёРµ РџРѕР»РёРЅРѕРјРѕРІ
-    
-            tPoly = poly2trellis(constrlen,genpoly); %РћРїСЂРµРґРµР»РµРЅРёРµ СЂРµС€РµС‚РєРё СЃРІРµСЂС‚РѕС‡РЅРѕРіРѕ РєРѕРґРёСЂРѕРІР°РЅРёСЏ                                         
-        
-%%РљРћР”РР РћР’РђРќРР• Р’РҐРћР”РќР«РҐ Р”РђРќРќР«РҐ:
+%%КОДИРОВАНИЕ ВХОДНЫХ ДАННЫХ:
 
             dataEnc = convenc(dataIn,tPoly);
             dataSym = bit2int(dataEnc,k);
          
-%%РљРђРњ 
+%%КАМ 
             txSig = qammod(dataSym,M);
 
 
-%%РЎРћР—Р”РђРќРР• Р¤РР›Р¬РўР Рђ РџР РРџРћР”РќРЇРўРћР“Рћ РљРћРЎРРќРЈРЎРђ: 
+%%СОЗДАНИЕ ФИЛЬТРА ПРИПОДНЯТОГО КОСИНУСА: 
         
-            rrcFilter = rcosdesign(rolloff,filtlen,sps); % С„СѓРЅРєС†РёСЏ РґР»СЏ СЃРѕР·РґР°РЅРёСЏ С„РёР»СЊС‚СЂР° РџСЂРёРї.РљРѕСЃ.
-            txSignal = upfirdn(txSig,rrcFilter,sps,1);
+            rrcFilter = rcosdesign(rolloff,filtlen,2*sps,"sqrt"); % функция создания фильтра корня прип-ого cos
+            txSignal = upfirdn(txSig,rrcFilter,2*sps,1);
         
 
-%%%РџР РћРҐРћР–Р”Р•РќРР• Р§Р•Р Р•Р— РЎРњР•РЎРРўР•Р›Р¬
+%%%ПРОХОЖДЕНИЕ ЧЕРЕЗ СМЕСИТЕЛЬ
    
-            ts = (0:length(txSignal)-1)/fs;
-            fc = exp(1i * 2 * pi * fss * ts.');           % Р§Р°СЃС‚РѕС‚Р° РіРµС‚РµСЂРѕРґРёРЅР° [Р“С†]
+            ts = (0:length(txSignal)-1)/sps;
+            fc = exp(1i * 2 * pi * fss * ts.');           % Частота гетеродина [Гц]
              
             txSigUp = txSignal.*fc; 
         end
 
 
 function [dataOut] = Receiver(rrcFilter,filtlen,sps,fss,rxSig,ts,M,k,tPoly,traceBack)
-%%РџР РР•РњРќРРљ
+%%ПРИЕМНИК
 
-%%РЎРњР•РЎРРўР•Р›Р¬
+%%СМЕСИТЕЛЬ
 
         rxSigdown = rxSig .* exp(-1i * 2 * pi * fss * ts.');
 
-%%Р¤РР›Р¬РўР  РџР РРџРћР”РќРЇРўРћР“Рћ РљРћРЎРРќРЈРЎРђ
+%%ФИЛЬТР ПРИПОДНЯТОГО КОСИНУСА
         rxFiltSignal = ...
-            upfirdn(rxSigdown,rrcFilter,1,sps);       % РЈРјРµРЅСЊС€РµРЅРёС‡Рµ С‡Р°СЃС‚РѕС‚С‹ РґРёСЃСЂРєРµС‚РёР·Р°С†РёРё Рё С„РёР»СЊС‚СЂР°С†РёСЏ
+            upfirdn(rxSigdown,rrcFilter,1,2*sps);       % Уменьшениче частоты дисркетизации и фильтрация
         rxFiltSignal = ...
             rxFiltSignal(filtlen + 1:end - filtlen); 
      
-%Р”Р•РњРћР”РЈР›РЇРўРћР  РљРђРњ
+%ДЕМОДУЛЯТОР КАМ
         rxSym = qamdemod(rxFiltSignal,M);
         rxSym = rxSym(:);
-%РџР•Р Р•Р’РћР” РЎРРњР’РћР›РћР’ Р’ Р‘РРўР«
+%ПЕРЕВОД СИМВОЛОВ В БИТЫ
         codedDataOut = int2bit(rxSym,k);                     
         numCodeWords = ...
-            floor(length(codedDataOut)*2/3); % РљРѕР»РёС‡РµСЃС‚РІРѕ РїРѕР»РЅС‹С… РєРѕРґРѕРІС‹С… СЃР»РѕРІ
+            floor(length(codedDataOut)*2/3); % Количество полных кодовых слов
         dataOut = ...
             vitdec(codedDataOut(1:numCodeWords*3/2), ...
-            tPoly,traceBack,'cont','hard');  % Р”РµРєРѕРґРёСЂРѕРІР°РЅРёРµ РґР°РЅРЅС‹С…
+            tPoly,traceBack,'cont','hard');  % Декодирование данных
 end
